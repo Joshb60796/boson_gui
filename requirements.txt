@@ -1,0 +1,20 @@
+# Boson+ radiometric GUI — Python dependencies
+# Install (from this directory):
+#   python3 -m pip install -r requirements.txt
+#
+# Also see install_deps.sh for Raspberry Pi system packages and notes on
+# BosonSDK / lgpio / tkinter (not all of those come from PyPI).
+
+# Core image / numeric stack
+numpy>=1.22
+opencv-python>=4.5
+Pillow>=9.0
+matplotlib>=3.5
+
+# ADS1115 temp-guard backend (optional if you only use DS18B20)
+smbus2>=0.4
+
+# Raspberry Pi GPIO (physical button + pulse_controller)
+# On some Pi OS images prefer:  sudo apt install python3-lgpio
+# If pip fails, use apt instead and remove this line.
+lgpio>=0.2
