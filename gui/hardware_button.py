@@ -1,14 +1,20 @@
-"""Physical GPIO button monitor (edge-triggered actions)."""
+"""
+Physical GPIO button monitor (edge-triggered).
+
+Phase 3: this thread only reads GPIO. All app/UI work is scheduled on the
+Tk main thread via root.after — never touches tk vars or widgets here.
+"""
 
 import threading
 import time
 
 from gui.constants import PHYSICAL_BUTTON_PIN
 from gui.gpio_service import PinRole
+from gui.ui_marshal import ui_call
 
 
 class PhysicalButtonMonitor:
-    """Polls a GPIO pin via GpioService and dispatches configured app actions."""
+    """Polls a GPIO pin via GpioService; dispatches actions on the UI thread."""
 
     def __init__(self, app, gpio, pin=PHYSICAL_BUTTON_PIN):
         self.app = app
@@ -20,11 +26,12 @@ class PhysicalButtonMonitor:
     def start(self):
         self.gpio.register_input(self.pin, PinRole.BUTTON, pull_down=False)
         self._stop.clear()
-        self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._thread = threading.Thread(
+            target=self._monitor_loop, name="physical-button", daemon=True
+        )
         self._thread.start()
 
     def _monitor_loop(self):
-        app = self.app
         last_state = 1
         while not self._stop.is_set():
             try:
@@ -34,23 +41,22 @@ class PhysicalButtonMonitor:
                 time.sleep(0.5)
                 continue
 
+            # Active-low press edge
             if state == 0 and last_state == 1:
-                action = app.physical_button_action_var.get()
-                if action == "Trigger Pulse":
-                    app.pulses.trigger_pulse()
-                elif action == "Record Stream":
-                    app.recording.record_stream()
-                elif action == "Record Frame":
-                    app.recording.record_frame()
-                elif action == "Record RAW":
-                    app.recording.record_raw_frame()
-                time.sleep(0.2)
+                # Plain string from RuntimeCache — never read tk vars here
+                action = self.app.runtime_cache.get_button_action()
+                if action and action != "None":
+                    # Capture action in default arg to avoid late binding
+                    ui_call(
+                        self.app.root,
+                        lambda a=action: self.app.dispatch_hardware_button(a),
+                    )
+                time.sleep(0.2)  # debounce
             last_state = state
             time.sleep(0.05)
 
     def close(self):
         self._stop.set()
-        # Pin freed when GpioService closes; optional explicit free:
         try:
             self.gpio.unregister(self.pin)
         except Exception:

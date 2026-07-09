@@ -434,6 +434,9 @@ def open_settings(app):
 
         app.reconfigure_temp_guard()
         app._refresh_temp_guard_status()
+        # Phase 3: refresh plain-Python cache for worker / button threads
+        if hasattr(app, "sync_runtime_caches"):
+            app.sync_runtime_caches()
         save_config(app)
         win.destroy()
 

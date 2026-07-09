@@ -2,6 +2,9 @@
 Temp Guard UI / interlock controller.
 
 Sensor backends and wiring notes: gui/temp_guard.py
+
+Phase 3: pulse/acquisition checks use RuntimeCache (safe off UI thread).
+Widget updates and messageboxes always go through ui_marshal.
 """
 
 import time
@@ -9,6 +12,7 @@ import time
 from tkinter import messagebox
 
 from gui.temp_guard import SENSOR_DS18B20, SENSOR_GPIO_ALARM, TempGuard
+from gui.ui_marshal import on_ui_thread, ui_call
 
 
 class TempGuardController:
@@ -26,6 +30,7 @@ class TempGuardController:
         return self.guard
 
     def reconfigure(self):
+        """Call from main thread only (reads tk vars)."""
         app = self.app
         gpio = getattr(app, "gpio", None)
         if self.guard is None:
@@ -42,7 +47,12 @@ class TempGuardController:
         self.refresh_status()
 
     def refresh_status(self):
+        """Update status label — must run on Tk main thread."""
         app = self.app
+        if not on_ui_thread(app.root):
+            ui_call(app.root, self.refresh_status)
+            return
+
         label = getattr(app, "temp_guard_status_label", None)
 
         def set_color(color):
@@ -59,14 +69,13 @@ class TempGuardController:
             return
 
         sensor = app.temp_guard_sensor_var.get()
-        value, unit = self.guard.read_current(sensor)
+        value, _unit = self.guard.read_current(sensor)
         if value is None:
             app.temp_guard_status_var.set("Temp Guard: READ FAIL")
             set_color("#cc0000")
             return
 
         if sensor == SENSOR_GPIO_ALARM:
-            # Active HIGH from Arduino → show TEMP HIGH
             over = int(value) != 0
             text = "TEMP HIGH" if over else "Temp OK (alarm LOW)"
         elif sensor == SENSOR_DS18B20:
@@ -86,24 +95,28 @@ class TempGuardController:
         now = time.time()
         if now - self._last_alert > 2.0:
             self._last_alert = now
-            app.root.after(
-                0,
+            ui_call(
+                app.root,
                 lambda m=message: messagebox.showerror("Temp Guard", m),
             )
 
     def pulse_allowed(self, show_error=True):
-        """When Temp Guard off → allow. When on → sensor must be under limit."""
+        """
+        Safe from any thread: uses RuntimeCache for settings, hardware for sensor.
+        UI updates are marshaled to the main thread.
+        """
         app = self.app
-        if self.guard is None or not app.temp_guard_enabled_var.get():
+        params = app.runtime_cache.get_temp_guard_params()
+        if self.guard is None or not params["enabled"]:
             return True
 
         allowed, message, _reading = self.guard.check_allows_pulse(
             enabled=True,
-            sensor_type=app.temp_guard_sensor_var.get(),
-            threshold_v=app.thermistor_threshold_v_var.get(),
-            threshold_c=app.ds18b20_threshold_c_var.get(),
+            sensor_type=params["sensor"],
+            threshold_v=params["threshold_v"],
+            threshold_c=params["threshold_c"],
         )
-        app.root.after(0, self.refresh_status)
+        ui_call(app.root, self.refresh_status)
 
         if allowed:
             return True
@@ -114,9 +127,12 @@ class TempGuardController:
         return False
 
     def acquisition_allowed(self, show_error=True):
-        """Frame acquisition blocked entirely while Temp Guard is enabled."""
+        """
+        Frame acquisition blocked while Temp Guard is enabled.
+        Safe from any thread (uses cache).
+        """
         app = self.app
-        if not app.temp_guard_enabled_var.get():
+        if not app.runtime_cache.get_temp_guard_params()["enabled"]:
             return True
         msg = (
             "Frame acquisition is disabled while Temp Guard is enabled.\n"
@@ -128,7 +144,7 @@ class TempGuardController:
         return False
 
     def schedule_status(self):
-        """Periodic main-UI status refresh (only polls hardware when enabled)."""
+        """Periodic main-UI status refresh."""
         app = self.app
         try:
             if app.temp_guard_enabled_var.get():
@@ -140,7 +156,10 @@ class TempGuardController:
                     label.config(fg="#666666")
         except Exception:
             pass
-        app.root.after(1000, self.schedule_status)
+        try:
+            app.root.after(1000, self.schedule_status)
+        except Exception:
+            pass
 
     def close(self):
         if self.guard is not None:

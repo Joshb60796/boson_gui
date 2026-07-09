@@ -4,9 +4,11 @@ Boson+ radiometric viewer — application orchestrator.
 Collaborators (do the real work):
   gui/gpio_service.py         — single lgpio chip + pin registry
   gui/camera.py               — Boson SDK + V4L2 (locked read_frame only)
+  gui/runtime_cache.py        — plain snapshots for worker threads (Phase 3)
+  gui/ui_marshal.py           — root.after helpers (Phase 3)
   gui/recording.py            — frame/stream/background capture
   gui/pulse_actions.py        — GPIO pulse trigger
-  gui/hardware_button.py      — physical button monitor
+  gui/hardware_button.py      — physical button monitor (GPIO-only thread)
   gui/temp_guard_controller.py — temp interlock + status
   gui/main_window.py          — main UI layout
   gui/video_loop.py           — live display
@@ -14,6 +16,7 @@ Collaborators (do the real work):
   gui/config_io.py            — config.json load/save
 """
 
+import threading
 import tkinter as tk
 
 from gui import settings as settings_ui
@@ -38,6 +41,7 @@ from gui.hardware_button import PhysicalButtonMonitor
 from gui.main_window import MainWindow
 from gui.pulse_actions import PulseService
 from gui.recording import RecordingService
+from gui.runtime_cache import RuntimeCache
 from gui.temp_guard_controller import TempGuardController
 from gui.video_loop import VideoLoop
 
@@ -59,6 +63,11 @@ class BosonApp:
             print(f"WARNING: GPIO unavailable: {e}")
             print("Pulse, button, and GPIO temp-alarm will not work until lgpio is fixed.")
 
+        # Plain settings snapshot for worker threads (Phase 3)
+        self.runtime_cache = RuntimeCache()
+        self._button_action_inflight = False
+        self._button_inflight_lock = threading.Lock()
+
         # ---- collaborators ----
         self.camera = CameraService(self)
         self.recording = RecordingService(self)
@@ -77,17 +86,18 @@ class BosonApp:
 
         self._init_variables()
         load_config(self)
+        self.sync_runtime_caches()
 
         self.camera.apply_video_mode()
         self.camera.apply_frame_rate()
 
-        # Claim default / configured pulse pins early
         try:
             self.pulses.sync_pulse_pins()
         except GpioError as e:
             print(f"WARNING: pulse pin setup: {e}")
 
         self.temp_guard_ctrl.reconfigure()
+        self.sync_runtime_caches()
 
         try:
             self.physical_button.start()
@@ -95,6 +105,14 @@ class BosonApp:
             print(f"WARNING: physical button not started: {e}")
 
         self.main_window.build()
+
+        # Keep button-action cache in sync when the combobox changes
+        try:
+            self.physical_button_action_var.trace_add(
+                "write", lambda *_: self.sync_runtime_caches()
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ vars
     def _init_variables(self):
@@ -123,7 +141,6 @@ class BosonApp:
         self.gpio_alarm_pin_var = tk.IntVar(value=DEFAULT_GPIO_ALARM_PIN)
         self.temp_guard_status_var = tk.StringVar(value="Temp Guard: off")
 
-        # Times as µs (always integer ms * 1000 after clamp). Limits in constants.
         self.pulse_channels = [
             {
                 "enabled": tk.BooleanVar(value=False),
@@ -159,6 +176,47 @@ class BosonApp:
             },
         ]
 
+    def sync_runtime_caches(self):
+        """
+        Snapshot tk settings into RuntimeCache.
+
+        Call from the Tk main thread only (after load_config, settings close,
+        before starting record/pulse from UI).
+        """
+        self.runtime_cache.refresh_from_app(self)
+
+    def dispatch_hardware_button(self, action: str):
+        """
+        Handle physical button actions on the Tk main thread only.
+        Debounced: ignores edges while a previous action is still running.
+        """
+        with self._button_inflight_lock:
+            if self._button_action_inflight:
+                return
+            self._button_action_inflight = True
+
+        try:
+            self.sync_runtime_caches()
+            if action == "Trigger Pulse":
+                self.pulses.trigger_pulse_button_action()
+            elif action == "Record Stream":
+                self.recording.record_stream()
+            elif action == "Record Frame":
+                self.recording.record_frame()
+            elif action == "Record RAW":
+                self.recording.record_raw_frame()
+        finally:
+            # Release debounce after a short delay so multi-second records
+            # don't stack, but quick pulses aren't blocked forever.
+            def _clear():
+                with self._button_inflight_lock:
+                    self._button_action_inflight = False
+
+            try:
+                self.root.after(400, _clear)
+            except Exception:
+                _clear()
+
     # -------- compatibility surface for settings.py / config_io.py --------
     @property
     def hardware_base_fps(self):
@@ -193,6 +251,7 @@ class BosonApp:
 
     def reconfigure_temp_guard(self):
         self.temp_guard_ctrl.reconfigure()
+        self.sync_runtime_caches()
 
     def _refresh_temp_guard_status(self):
         self.temp_guard_ctrl.refresh_status()
@@ -225,6 +284,7 @@ class BosonApp:
         self.root.destroy()
 
     def run(self):
+        self.sync_runtime_caches()
         self.video_loop.start()
         self.temp_guard_ctrl.schedule_status()
         self.root.mainloop()

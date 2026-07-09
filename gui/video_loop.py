@@ -38,6 +38,7 @@ class VideoLoop:
         ret, frame = app.camera.read_frame()
         if ret:
             self.frame_count += 1
+            # Live view runs on Tk main thread — process_frame may read cache
             frame = app.recording.process_frame(frame)
 
             display = (
