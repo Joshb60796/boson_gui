@@ -9,7 +9,8 @@ Collaborators (do the real work):
   gui/recording.py            — frame/stream/background capture
   gui/pulse_actions.py        — GPIO pulse trigger
   gui/hardware_button.py      — physical button monitor (GPIO-only thread)
-  gui/temp_guard_controller.py — temp interlock + status
+  gui/temp_guard/             — drivers (ads/ds18b20/gpio) + policy (Phase 5)
+  gui/temp_guard_controller.py — temp interlock UI gate
   gui/main_window.py          — main UI layout
   gui/video_loop.py           — live display
   gui/settings.py             — settings dialogs

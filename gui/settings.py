@@ -109,8 +109,8 @@ def open_settings(app):
     )
 
     # ---- Temperature guard -------------------------------------------------
-    # Full install / wiring / import notes live in gui/temp_guard.py (module
-    # docstring). Summary for operators:
+    # Full install / wiring notes: gui/temp_guard/SETUP.md
+    # Drivers live under gui/temp_guard/; policy in policy.py. Summary:
     #
     # DS18B20 (1-Wire °C):
     #   - /boot/firmware/config.txt → dtoverlay=w1-gpio  then reboot
@@ -152,7 +152,7 @@ def open_settings(app):
             f"GPIO alarm: Arduino 3.3 V digital HIGH = TEMP HIGH "
             f"(default BCM{DEFAULT_GPIO_ALARM_PIN}; avoids button BCM{PHYSICAL_BUTTON_PIN}, "
             "pulse defaults 22/23/24/27, I2C 2/3). "
-            "Use 3.3 V logic only. Details: gui/temp_guard.py"
+            "Use 3.3 V logic only. Details: gui/temp_guard/SETUP.md"
         ),
         font=("Helvetica", 9),
         wraplength=820,

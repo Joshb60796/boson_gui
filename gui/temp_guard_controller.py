@@ -1,7 +1,7 @@
 """
 Temp Guard UI / interlock controller.
 
-Sensor backends and wiring notes: gui/temp_guard.py
+Sensor backends and wiring notes: gui/temp_guard/SETUP.md
 
 Phase 3: pulse/acquisition checks use RuntimeCache (safe off UI thread).
 Widget updates and messageboxes always go through ui_marshal.

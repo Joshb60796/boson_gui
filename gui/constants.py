@@ -88,7 +88,7 @@ def start_delay_ms_to_us(ms):
     return clamp_start_delay_ms(ms) * 1000
 
 # ---------------------------------------------------------------------------
-# Temperature guard defaults (see gui/temp_guard.py for full install/wiring)
+# Temperature guard defaults (see gui/temp_guard/SETUP.md for install/wiring)
 # ---------------------------------------------------------------------------
 # Master switch: False → feature unused (no sensor traffic, pulses never
 # blocked for temperature). User must check "Temp Guard" in Settings.
