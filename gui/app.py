@@ -13,7 +13,8 @@ Collaborators (do the real work):
   gui/main_window.py          — main UI layout
   gui/video_loop.py           — live display
   gui/settings.py             — settings dialogs
-  gui/config_io.py            — config.json load/save
+  gui/settings_model.py       — versioned AppSettings dataclass (Phase 4)
+  gui/config_io.py            — config.json load/save via AppSettings
 """
 
 import threading
@@ -85,7 +86,7 @@ class BosonApp:
         self.root.geometry("1280x800")
 
         self._init_variables()
-        load_config(self)
+        self.settings_model = load_config(self)
         self.sync_runtime_caches()
 
         self.camera.apply_video_mode()
@@ -178,12 +179,19 @@ class BosonApp:
 
     def sync_runtime_caches(self):
         """
-        Snapshot tk settings into RuntimeCache.
+        Snapshot settings into RuntimeCache (via AppSettings when possible).
 
         Call from the Tk main thread only (after load_config, settings close,
         before starting record/pulse from UI).
         """
         self.runtime_cache.refresh_from_app(self)
+        # Keep settings_model in sync for introspection
+        try:
+            from gui.settings_model import AppSettings
+
+            self.settings_model = AppSettings.capture_from_app(self)
+        except Exception:
+            pass
 
     def dispatch_hardware_button(self, action: str):
         """

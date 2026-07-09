@@ -35,7 +35,21 @@ class RuntimeCache:
         self.pulse_channels = []
 
     def refresh_from_app(self, app) -> None:
-        """Read all tk vars — call only from the Tk main thread."""
+        """
+        Read settings — call only from the Tk main thread.
+
+        Prefers AppSettings.capture_from_app when available (Phase 4);
+        falls back to reading tk vars directly.
+        """
+        try:
+            from gui.settings_model import AppSettings
+
+            s = AppSettings.capture_from_app(app)
+            self.refresh_from_settings(s, button_action=str(app.physical_button_action_var.get()))
+            return
+        except Exception:
+            pass
+
         channels = []
         for ch in app.pulse_channels:
             on_us = pulse_time_ms_to_us(us_to_pulse_time_ms(ch["on_time_us"].get()))
@@ -68,6 +82,35 @@ class RuntimeCache:
             self.record_frames = int(app.record_frames_var.get())
             self.sync_capture = bool(app.sync_capture_var.get())
             self.capture_delay_us = int(app.capture_delay_us_var.get())
+            self.pulse_channels = channels
+
+    def refresh_from_settings(self, settings, button_action: str | None = None) -> None:
+        """Populate cache from an AppSettings instance (no Tk required)."""
+        channels = []
+        for ch in settings.pulse_channels:
+            channels.append({
+                "enabled": bool(ch.enabled),
+                "pin": int(ch.pin),
+                "on_time_us": int(ch.on_time_us),
+                "off_time_us": int(ch.off_time_us),
+                "pulses": int(ch.pulses),
+                "start_delay_us": int(ch.start_delay_us),
+            })
+        with self._lock:
+            self.button_action = str(
+                button_action
+                if button_action is not None
+                else settings.physical_button_action
+            )
+            self.temp_guard_enabled = bool(settings.temp_guard_enabled)
+            self.temp_guard_sensor = str(settings.temp_guard_sensor)
+            self.thermistor_threshold_v = float(settings.thermistor_threshold_v)
+            self.ds18b20_threshold_c = float(settings.ds18b20_threshold_c)
+            self.fpn_enabled = bool(settings.fpn_correction_enabled)
+            self.save_path = str(settings.save_path)
+            self.record_frames = int(settings.record_frames)
+            self.sync_capture = bool(settings.sync_capture)
+            self.capture_delay_us = int(settings.capture_delay_us)
             self.pulse_channels = channels
 
     def get_button_action(self) -> str:
