@@ -2,6 +2,7 @@
 Boson+ radiometric viewer — application orchestrator.
 
 Collaborators (do the real work):
+  gui/gpio_service.py         — single lgpio chip + pin registry
   gui/camera.py               — Boson SDK + V4L2
   gui/recording.py            — frame/stream/background capture
   gui/pulse_actions.py        — GPIO pulse trigger
@@ -22,6 +23,7 @@ from gui.constants import (
     DEFAULT_DS18B20_ID,
     DEFAULT_DS18B20_THRESHOLD_C,
     DEFAULT_GPIO_ALARM_PIN,
+    DEFAULT_PULSE_PINS,
     DEFAULT_RECORD_FRAMES,
     DEFAULT_SAVE_PATH,
     DEFAULT_TEMP_GUARD_ENABLED,
@@ -31,6 +33,7 @@ from gui.constants import (
     DEFAULT_THERMISTOR_I2C_BUS,
     DEFAULT_THERMISTOR_THRESHOLD_V,
 )
+from gui.gpio_service import GpioError, GpioService
 from gui.hardware_button import PhysicalButtonMonitor
 from gui.main_window import MainWindow
 from gui.pulse_actions import PulseService
@@ -48,12 +51,20 @@ class BosonApp:
     """
 
     def __init__(self):
-        # ---- collaborators (created early; some need vars after init) ----
+        # ---- shared GPIO (must exist before button / alarm / pulses) ----
+        self.gpio = GpioService()
+        try:
+            self.gpio.open()
+        except GpioError as e:
+            print(f"WARNING: GPIO unavailable: {e}")
+            print("Pulse, button, and GPIO temp-alarm will not work until lgpio is fixed.")
+
+        # ---- collaborators ----
         self.camera = CameraService(self)
         self.recording = RecordingService(self)
         self.pulses = PulseService(self)
         self.temp_guard_ctrl = TempGuardController(self)
-        self.physical_button = PhysicalButtonMonitor(self)
+        self.physical_button = PhysicalButtonMonitor(self, self.gpio)
         self.main_window = MainWindow(self)
         self.video_loop = VideoLoop(self)
 
@@ -69,8 +80,20 @@ class BosonApp:
 
         self.camera.apply_video_mode()
         self.camera.apply_frame_rate()
+
+        # Claim default / configured pulse pins early
+        try:
+            self.pulses.sync_pulse_pins()
+        except GpioError as e:
+            print(f"WARNING: pulse pin setup: {e}")
+
         self.temp_guard_ctrl.reconfigure()
-        self.physical_button.start()
+
+        try:
+            self.physical_button.start()
+        except GpioError as e:
+            print(f"WARNING: physical button not started: {e}")
+
         self.main_window.build()
 
     # ------------------------------------------------------------------ vars
@@ -104,7 +127,7 @@ class BosonApp:
         self.pulse_channels = [
             {
                 "enabled": tk.BooleanVar(value=False),
-                "pin": tk.IntVar(value=24),
+                "pin": tk.IntVar(value=DEFAULT_PULSE_PINS[0]),
                 "on_time_us": tk.IntVar(value=1000),
                 "off_time_us": tk.IntVar(value=1000),
                 "pulses": tk.IntVar(value=1),
@@ -112,7 +135,7 @@ class BosonApp:
             },
             {
                 "enabled": tk.BooleanVar(value=False),
-                "pin": tk.IntVar(value=27),
+                "pin": tk.IntVar(value=DEFAULT_PULSE_PINS[1]),
                 "on_time_us": tk.IntVar(value=1000),
                 "off_time_us": tk.IntVar(value=1000),
                 "pulses": tk.IntVar(value=10),
@@ -120,7 +143,7 @@ class BosonApp:
             },
             {
                 "enabled": tk.BooleanVar(value=False),
-                "pin": tk.IntVar(value=22),
+                "pin": tk.IntVar(value=DEFAULT_PULSE_PINS[2]),
                 "on_time_us": tk.IntVar(value=1000),
                 "off_time_us": tk.IntVar(value=1000),
                 "pulses": tk.IntVar(value=1),
@@ -128,7 +151,7 @@ class BosonApp:
             },
             {
                 "enabled": tk.BooleanVar(value=False),
-                "pin": tk.IntVar(value=23),
+                "pin": tk.IntVar(value=DEFAULT_PULSE_PINS[3]),
                 "on_time_us": tk.IntVar(value=1000),
                 "off_time_us": tk.IntVar(value=1000),
                 "pulses": tk.IntVar(value=1),
@@ -185,9 +208,22 @@ class BosonApp:
     # -------------------------------------------------------------- lifecycle
     def on_closing(self):
         save_config(self)
-        self.temp_guard_ctrl.close()
-        self.physical_button.close()
-        self.camera.close()
+        try:
+            self.temp_guard_ctrl.close()
+        except Exception:
+            pass
+        try:
+            self.physical_button.close()
+        except Exception:
+            pass
+        try:
+            self.gpio.close()
+        except Exception:
+            pass
+        try:
+            self.camera.close()
+        except Exception:
+            pass
         self.root.destroy()
 
     def run(self):

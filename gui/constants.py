@@ -12,6 +12,18 @@ PHYSICAL_BUTTON_PIN = 17
 DEFAULT_FRAME_RATE = 60
 
 # ---------------------------------------------------------------------------
+# GPIO pin map (BCM). Single owner: gui.gpio_service.GpioService
+# ---------------------------------------------------------------------------
+# Do not claim these as app GPIO (buses / common overlays).
+RESERVED_BUS_PINS = frozenset({
+    2, 3,   # I2C SDA/SCL (ADS1115)
+    4,      # common 1-Wire data (DS18B20)
+    14, 15, # UART TX/RX
+})
+# Default pulse channel pins (must not overlap button / alarm / reserved)
+DEFAULT_PULSE_PINS = (24, 27, 22, 23)
+
+# ---------------------------------------------------------------------------
 # GPIO pulse limits (edit these to change allowed Settings range)
 # Times are integer milliseconds only (no sub-ms). Applied to On/Off pulse
 # widths. Start delay allows 0 ms (no delay) up to the same max.
@@ -95,6 +107,5 @@ DEFAULT_DS18B20_ID = ""  # empty = first 28-* sensor found under w1 devices
 DEFAULT_DS18B20_THRESHOLD_C = 60.0  # UI clamps usable setpoints to 20–80 °C
 
 # Arduino 3.3 V digital alarm (active HIGH = TEMP HIGH). BCM pin choice avoids:
-#   2/3 I2C, 4 common 1-Wire, 14/15 UART, 17 physical button,
-#   22/23/24/27 default pulse channels.
+#   RESERVED_BUS_PINS, PHYSICAL_BUTTON_PIN, DEFAULT_PULSE_PINS.
 DEFAULT_GPIO_ALARM_PIN = 16  # BCM16 — change here or in Settings

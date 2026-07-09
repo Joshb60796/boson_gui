@@ -16,7 +16,8 @@ class TempGuardController:
 
     def __init__(self, app):
         self.app = app
-        self.guard = TempGuard()
+        gpio = getattr(app, "gpio", None)
+        self.guard = TempGuard(gpio=gpio)
         self._last_alert = 0.0
 
     @property
@@ -26,8 +27,9 @@ class TempGuardController:
 
     def reconfigure(self):
         app = self.app
+        gpio = getattr(app, "gpio", None)
         if self.guard is None:
-            self.guard = TempGuard()
+            self.guard = TempGuard(gpio=gpio)
         self.guard.configure(
             sensor_type=app.temp_guard_sensor_var.get(),
             i2c_bus=app.thermistor_i2c_bus_var.get(),
@@ -35,6 +37,7 @@ class TempGuardController:
             channel=app.thermistor_channel_var.get(),
             ds18b20_id=app.ds18b20_id_var.get(),
             gpio_alarm_pin=app.gpio_alarm_pin_var.get(),
+            gpio=gpio,
         )
         self.refresh_status()
 

@@ -124,7 +124,7 @@ Wiring:
   pin reads LOW (no alarm). The Arduino must actively drive HIGH for alarm.
 
 Software:
-  - Uses lgpio (same stack as pulse_controller / physical button)
+  - Uses shared GpioService (gui/gpio_service.py) — one chip for the whole app
   - No extra pip package beyond lgpio
 
 ==============================================================================
@@ -423,78 +423,71 @@ class DigitalAlarmReader:
 
     HIGH (1) → alarm (TEMP HIGH), block pulses.
     LOW  (0) → OK.
-    Internal pull-down so floating/open reads as LOW.
-    Wiring / pin choice: module docstring OPTION C.
+    Uses shared GpioService (pull-down). Wiring: module docstring OPTION C.
     """
 
-    def __init__(self, pin=_DEFAULT_GPIO_ALARM_PIN):
+    def __init__(self, pin=_DEFAULT_GPIO_ALARM_PIN, gpio=None):
         self.pin = int(pin)
-        self._h = None
+        self.gpio = gpio  # GpioService instance (required for live use)
         self._lock = threading.Lock()
+        self._registered = False
         self.last_error = None
         self.last_level = None  # 0 or 1
         self.available = False
 
-    def configure(self, pin=None):
+    def configure(self, pin=None, gpio=None):
         with self._lock:
+            if gpio is not None:
+                self.gpio = gpio
             if pin is not None and int(pin) != self.pin:
+                self._unregister_unlocked()
                 self.pin = int(pin)
-                self._close_unlocked()
 
-    def _close_unlocked(self):
-        if self._h is not None:
+    def _unregister_unlocked(self):
+        if self._registered and self.gpio is not None:
             try:
-                import lgpio
-
-                try:
-                    lgpio.gpio_free(self._h, self.pin)
-                except Exception:
-                    pass
-                lgpio.gpiochip_close(self._h)
+                self.gpio.unregister(self.pin)
             except Exception:
                 pass
-            self._h = None
+        self._registered = False
         self.available = False
 
     def close(self):
         with self._lock:
-            self._close_unlocked()
+            self._unregister_unlocked()
 
-    def _open_unlocked(self):
-        if self._h is not None:
-            return
+    def _ensure_registered_unlocked(self):
+        if self.gpio is None:
+            self.last_error = "GpioService not set (app must pass shared GPIO)"
+            self.available = False
+            return False
+        if self._registered:
+            return True
         try:
-            import lgpio
+            from gui.gpio_service import PinRole
 
-            h = lgpio.gpiochip_open(0)
-            # Pull-down: open wire → LOW (no false TEMP HIGH)
-            lgpio.gpio_claim_input(h, self.pin, lgpio.SET_PULL_DOWN)
-            self._h = h
+            self.gpio.register_input(
+                self.pin, PinRole.TEMP_ALARM, pull_down=True
+            )
+            self._registered = True
             self.available = True
             self.last_error = None
             print(f"Temp guard digital alarm ready on BCM{self.pin} (active HIGH)")
-        except ImportError:
-            self._h = None
-            self.available = False
-            self.last_error = "lgpio not installed (pip install lgpio or apt python3-lgpio)"
+            return True
         except Exception as e:
-            self._h = None
+            self._registered = False
             self.available = False
             self.last_error = str(e)
+            return False
 
     def read_level(self):
-        """
-        Return 1 if alarm line is HIGH, 0 if LOW, or None on failure.
-        """
+        """Return 1 if alarm line is HIGH, 0 if LOW, or None on failure."""
         with self._lock:
-            self._open_unlocked()
-            if self._h is None:
+            if not self._ensure_registered_unlocked():
                 self.last_level = None
                 return None
             try:
-                import lgpio
-
-                level = int(lgpio.gpio_read(self._h, self.pin))
+                level = int(self.gpio.read(self.pin))
                 self.last_level = 1 if level else 0
                 self.last_error = None
                 self.available = True
@@ -503,7 +496,7 @@ class DigitalAlarmReader:
                 self.last_error = str(e)
                 self.last_level = None
                 self.available = False
-                self._close_unlocked()
+                self._unregister_unlocked()
                 return None
 
 
@@ -518,14 +511,15 @@ class TempGuard:
     Setup checklist is in the module docstring at the top of this file.
     """
 
-    def __init__(self):
+    def __init__(self, gpio=None):
         self.ads = Ads1115Reader()
         self.ds18b20 = DS18B20Reader()
-        self.gpio_alarm = DigitalAlarmReader()
+        self.gpio_alarm = DigitalAlarmReader(gpio=gpio)
         self.last_error = None
         self.last_reading = None  # float V/°C, or 0/1 for GPIO alarm
         self.last_unit = None  # "V", "C", or "ALARM"
         self._sensor_type = SENSOR_DS18B20
+        self._gpio = gpio
 
     def configure(
         self,
@@ -535,13 +529,16 @@ class TempGuard:
         channel=0,
         ds18b20_id="",
         gpio_alarm_pin=_DEFAULT_GPIO_ALARM_PIN,
+        gpio=None,
     ):
         """Apply Settings values; does not force a hardware open until read."""
+        if gpio is not None:
+            self._gpio = gpio
         self.ads.configure(
             i2c_bus=i2c_bus, i2c_address=i2c_address, channel=channel
         )
         self.ds18b20.configure(sensor_id=ds18b20_id)
-        self.gpio_alarm.configure(pin=gpio_alarm_pin)
+        self.gpio_alarm.configure(pin=gpio_alarm_pin, gpio=self._gpio)
         self._sensor_type = sensor_type
 
     def close(self):

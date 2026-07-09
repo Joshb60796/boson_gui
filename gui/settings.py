@@ -368,6 +368,11 @@ def open_settings(app):
         _bind_clamp_on_focus_out(delay_entry, delay_ms_var, clamp_start_delay_ms)
 
     def on_settings_close():
+        from tkinter import messagebox
+
+        from gui.constants import PHYSICAL_BUTTON_PIN
+        from gui.gpio_service import GpioError
+
         try:
             app.capture_delay_us_var.set(int(capture_delay_ms_var.get()) * 1000)
         except (tk.TclError, ValueError, TypeError):
@@ -393,6 +398,40 @@ def open_settings(app):
             app.ds18b20_threshold_c_var.set(max(20.0, min(80.0, t_c)))
         except (TypeError, ValueError):
             pass
+
+        # ---- GPIO pin conflict check (Phase 1) ----
+        pulse_pins = []
+        for ch in app.pulse_channels:
+            try:
+                pulse_pins.append(int(ch["pin"].get()))
+            except (TypeError, ValueError, tk.TclError):
+                pulse_pins.append(-1)
+        try:
+            alarm_pin = int(app.gpio_alarm_pin_var.get())
+        except (TypeError, ValueError, tk.TclError):
+            alarm_pin = None
+
+        if getattr(app, "gpio", None) is not None:
+            conflicts = app.gpio.validate_pin_set(
+                pulse_pins=pulse_pins,
+                alarm_pin=alarm_pin,
+                button_pin=PHYSICAL_BUTTON_PIN,
+            )
+            if conflicts:
+                messagebox.showerror(
+                    "GPIO pin conflict",
+                    "Fix pin assignments before closing Settings:\n\n"
+                    + "\n".join(f"• {c}" for c in conflicts),
+                )
+                return  # keep Settings open
+
+        try:
+            if getattr(app, "pulses", None) is not None:
+                app.pulses.sync_pulse_pins()
+        except GpioError as e:
+            messagebox.showerror("GPIO", str(e))
+            return
+
         app.reconfigure_temp_guard()
         app._refresh_temp_guard_status()
         save_config(app)

@@ -11,6 +11,7 @@ from gui.constants import (
     us_to_pulse_time_ms,
     us_to_start_delay_ms,
 )
+from gui.gpio_service import GpioError
 
 
 class PulseService:
@@ -31,26 +32,61 @@ class PulseService:
         ch["start_delay_us"].set(delay_us)
         return on_us, off_us, pulses, delay_us
 
+    def sync_pulse_pins(self):
+        """Claim enabled (or all configured) channel pins as pulse outputs."""
+        app = self.app
+        pins = []
+        for ch in app.pulse_channels:
+            try:
+                pins.append(int(ch["pin"].get()))
+            except (TypeError, ValueError, Exception):
+                continue
+        # Register all configured pins so enabling a channel later is instant
+        if pins:
+            app.gpio.ensure_pulse_pins(pins)
+
     def trigger_pulse(self):
         app = self.app
         if not app.temp_guard_ctrl.pulse_allowed(show_error=True):
             return False
 
         config = []
+        pins = []
         for ch in app.pulse_channels:
             if ch["enabled"].get():
                 on_us, off_us, pulses, delay_us = self.clamp_channel_timing(ch)
+                pin = int(ch["pin"].get())
+                pins.append(pin)
                 config.append({
-                    "pin": ch["pin"].get(),
+                    "pin": pin,
                     "on_time_us": on_us,
                     "off_time_us": off_us,
                     "pulses": pulses,
                     "start_delay_us": delay_us,
                 })
-        if config:
-            threading.Thread(
-                target=run_pulse_sequence, args=(config,), daemon=True
-            ).start()
+        if not config:
+            return True
+
+        try:
+            app.gpio.ensure_pulse_pins(pins)
+        except GpioError as e:
+            print(f"Pulse pin claim failed: {e}")
+            try:
+                from tkinter import messagebox
+
+                app.root.after(
+                    0,
+                    lambda m=str(e): messagebox.showerror("GPIO", m),
+                )
+            except Exception:
+                pass
+            return False
+
+        threading.Thread(
+            target=run_pulse_sequence,
+            args=(config, app.gpio),
+            daemon=True,
+        ).start()
         return True
 
     def trigger_pulse_button_action(self):

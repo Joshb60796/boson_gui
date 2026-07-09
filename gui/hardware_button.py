@@ -3,31 +3,37 @@
 import threading
 import time
 
-import lgpio
-
 from gui.constants import PHYSICAL_BUTTON_PIN
+from gui.gpio_service import PinRole
 
 
 class PhysicalButtonMonitor:
-    """Polls a GPIO pin and dispatches configured app actions."""
+    """Polls a GPIO pin via GpioService and dispatches configured app actions."""
 
-    def __init__(self, app, pin=PHYSICAL_BUTTON_PIN):
+    def __init__(self, app, gpio, pin=PHYSICAL_BUTTON_PIN):
         self.app = app
-        self.pin = pin
-        self.button_h = None
+        self.gpio = gpio
+        self.pin = int(pin)
         self._thread = None
+        self._stop = threading.Event()
 
     def start(self):
-        self.button_h = lgpio.gpiochip_open(0)
-        lgpio.gpio_claim_input(self.button_h, self.pin, lgpio.SET_PULL_UP)
+        self.gpio.register_input(self.pin, PinRole.BUTTON, pull_down=False)
+        self._stop.clear()
         self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._thread.start()
 
     def _monitor_loop(self):
         app = self.app
         last_state = 1
-        while True:
-            state = lgpio.gpio_read(self.button_h, self.pin)
+        while not self._stop.is_set():
+            try:
+                state = self.gpio.read(self.pin)
+            except Exception as e:
+                print(f"Physical button read error: {e}")
+                time.sleep(0.5)
+                continue
+
             if state == 0 and last_state == 1:
                 action = app.physical_button_action_var.get()
                 if action == "Trigger Pulse":
@@ -43,9 +49,9 @@ class PhysicalButtonMonitor:
             time.sleep(0.05)
 
     def close(self):
-        if self.button_h is not None:
-            try:
-                lgpio.gpiochip_close(self.button_h)
-            except Exception:
-                pass
-            self.button_h = None
+        self._stop.set()
+        # Pin freed when GpioService closes; optional explicit free:
+        try:
+            self.gpio.unregister(self.pin)
+        except Exception:
+            pass
