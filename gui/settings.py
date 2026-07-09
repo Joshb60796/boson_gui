@@ -125,7 +125,14 @@ def open_settings(app):
     #   - i2cdetect -y 1  (often shows 0x48 → Addr 72 in UI)
     #
     # Leave checkbox OFF until Read Now shows a sensible value.
-    from gui.temp_guard import DS18B20Reader, SENSOR_ADS1115, SENSOR_DS18B20
+    # GPIO alarm: Arduino 3.3 V out → Pi BCM pin (default 16); HIGH = TEMP HIGH.
+    from gui.constants import DEFAULT_GPIO_ALARM_PIN, PHYSICAL_BUTTON_PIN
+    from gui.temp_guard import (
+        DS18B20Reader,
+        SENSOR_ADS1115,
+        SENSOR_DS18B20,
+        SENSOR_GPIO_ALARM,
+    )
 
     interlock = ttk.LabelFrame(win, text="Temp Guard")
     interlock.pack(pady=12, fill="x", padx=20)
@@ -141,9 +148,11 @@ def open_settings(app):
         text=(
             "Disabled by default. Wire sensor → choose type → set threshold → "
             "Read Now → then enable. "
-            "DS18B20: 1-Wire °C (dtoverlay=w1-gpio, 4.7k pull-up; no pip). "
-            "ADS1115: I2C ADC + thermistor (enable I2C, pip install smbus2). "
-            "Details: comments in gui/temp_guard.py"
+            "DS18B20: 1-Wire °C. ADS1115: I2C thermistor V. "
+            f"GPIO alarm: Arduino 3.3 V digital HIGH = TEMP HIGH "
+            f"(default BCM{DEFAULT_GPIO_ALARM_PIN}; avoids button BCM{PHYSICAL_BUTTON_PIN}, "
+            "pulse defaults 22/23/24/27, I2C 2/3). "
+            "Use 3.3 V logic only. Details: gui/temp_guard.py"
         ),
         font=("Helvetica", 9),
         wraplength=820,
@@ -156,6 +165,7 @@ def open_settings(app):
     sensor_labels = {
         SENSOR_DS18B20: "DS18B20 (1-Wire °C)",
         SENSOR_ADS1115: "ADS1115 (thermistor V)",
+        SENSOR_GPIO_ALARM: "GPIO alarm (Arduino HIGH)",
     }
     # Keep StringVar as sensor key; combobox shows friendly labels
     sensor_display = tk.StringVar(
@@ -167,7 +177,7 @@ def open_settings(app):
         sensor_row,
         textvariable=sensor_display,
         values=list(sensor_labels.values()),
-        width=28,
+        width=32,
         state="readonly",
     )
     sensor_combo.pack(side=tk.LEFT, padx=8)
@@ -227,6 +237,19 @@ def open_settings(app):
         side=tk.LEFT, padx=4
     )
 
+    gpio_frame = ttk.Frame(interlock)
+    gpio_frame.pack(fill="x", padx=10, pady=4)
+
+    ttk.Label(gpio_frame, text="GPIO alarm — BCM pin:").pack(side=tk.LEFT)
+    ttk.Entry(gpio_frame, textvariable=app.gpio_alarm_pin_var, width=5).pack(
+        side=tk.LEFT, padx=(2, 8)
+    )
+    ttk.Label(
+        gpio_frame,
+        text="(3.3 V HIGH = TEMP HIGH; common GND; pull-down on Pi)",
+        font=("Helvetica", 9),
+    ).pack(side=tk.LEFT)
+
     live_row = ttk.Frame(interlock)
     live_row.pack(fill="x", padx=10, pady=4)
     live_var = tk.StringVar(value="Reading: --")
@@ -245,6 +268,10 @@ def open_settings(app):
             live_var.set(f"Reading: ERR ({err[:40]})")
         elif unit == "C":
             live_var.set(f"Reading: {value:.2f} °C")
+        elif unit == "ALARM":
+            live_var.set(
+                "TEMP HIGH (input HIGH)" if int(value) else "OK (input LOW)"
+            )
         else:
             live_var.set(f"Reading: {value:.3f} V")
         app._refresh_temp_guard_status()
@@ -256,8 +283,6 @@ def open_settings(app):
     def update_sensor_panels(*_args):
         key = _sensor_key_from_display()
         app.temp_guard_sensor_var.set(key)
-        # Dim unused panel text via state of children is awkward; leave both
-        # visible so thresholds can be set before switching hardware.
 
     sensor_combo.bind("<<ComboboxSelected>>", update_sensor_panels)
 

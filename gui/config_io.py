@@ -7,6 +7,7 @@ from gui.constants import (
     DEFAULT_DS18B20_ID,
     DEFAULT_DS18B20_THRESHOLD_C,
     DEFAULT_FRAME_RATE,
+    DEFAULT_GPIO_ALARM_PIN,
     DEFAULT_RECORD_FRAMES,
     DEFAULT_SAVE_PATH,
     DEFAULT_TEMP_GUARD_ENABLED,
@@ -39,8 +40,8 @@ def load_config(app):
         app.fpn_correction_enabled.set(bool(config.get("fpn_correction_enabled", False)))
 
         # Temp guard keys (see gui/temp_guard.py for hardware setup):
-        #   temp_guard_enabled, temp_guard_sensor (ads1115|ds18b20),
-        #   thermistor_* (ADS1115), ds18b20_id / ds18b20_threshold_c
+        #   temp_guard_enabled, temp_guard_sensor (ads1115|ds18b20|gpio_alarm),
+        #   thermistor_*, ds18b20_*, gpio_alarm_pin
         # Prefer new keys; migrate legacy thermistor_enabled if present.
         if "temp_guard_enabled" in config:
             enabled = bool(config["temp_guard_enabled"])
@@ -71,6 +72,9 @@ def load_config(app):
         app.ds18b20_id_var.set(str(config.get("ds18b20_id", DEFAULT_DS18B20_ID)))
         app.ds18b20_threshold_c_var.set(
             float(config.get("ds18b20_threshold_c", DEFAULT_DS18B20_THRESHOLD_C))
+        )
+        app.gpio_alarm_pin_var.set(
+            int(config.get("gpio_alarm_pin", DEFAULT_GPIO_ALARM_PIN))
         )
 
         default_fps = getattr(app, "hardware_base_fps", DEFAULT_FRAME_RATE)
@@ -127,6 +131,7 @@ def save_config(app):
         "thermistor_threshold_v": app.thermistor_threshold_v_var.get(),
         "ds18b20_id": app.ds18b20_id_var.get(),
         "ds18b20_threshold_c": app.ds18b20_threshold_c_var.get(),
+        "gpio_alarm_pin": app.gpio_alarm_pin_var.get(),
         "pulse_channels": [],
     }
 

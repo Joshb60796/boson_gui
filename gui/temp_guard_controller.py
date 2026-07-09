@@ -8,7 +8,7 @@ import time
 
 from tkinter import messagebox
 
-from gui.temp_guard import SENSOR_DS18B20, TempGuard
+from gui.temp_guard import SENSOR_DS18B20, SENSOR_GPIO_ALARM, TempGuard
 
 
 class TempGuardController:
@@ -34,6 +34,7 @@ class TempGuardController:
             i2c_address=app.thermistor_i2c_addr_var.get(),
             channel=app.thermistor_channel_var.get(),
             ds18b20_id=app.ds18b20_id_var.get(),
+            gpio_alarm_pin=app.gpio_alarm_pin_var.get(),
         )
         self.refresh_status()
 
@@ -55,13 +56,17 @@ class TempGuardController:
             return
 
         sensor = app.temp_guard_sensor_var.get()
-        value, _unit = self.guard.read_current(sensor)
+        value, unit = self.guard.read_current(sensor)
         if value is None:
             app.temp_guard_status_var.set("Temp Guard: READ FAIL")
             set_color("#cc0000")
             return
 
-        if sensor == SENSOR_DS18B20:
+        if sensor == SENSOR_GPIO_ALARM:
+            # Active HIGH from Arduino → show TEMP HIGH
+            over = int(value) != 0
+            text = "TEMP HIGH" if over else "Temp OK (alarm LOW)"
+        elif sensor == SENSOR_DS18B20:
             limit = app.ds18b20_threshold_c_var.get()
             over = value > limit
             text = f"{'OVER TEMP' if over else 'Temp OK'}: {value:.1f}°C"

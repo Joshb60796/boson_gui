@@ -21,6 +21,7 @@ from gui.config_io import load_config, save_config
 from gui.constants import (
     DEFAULT_DS18B20_ID,
     DEFAULT_DS18B20_THRESHOLD_C,
+    DEFAULT_GPIO_ALARM_PIN,
     DEFAULT_RECORD_FRAMES,
     DEFAULT_SAVE_PATH,
     DEFAULT_TEMP_GUARD_ENABLED,
@@ -96,6 +97,7 @@ class BosonApp:
         )
         self.ds18b20_id_var = tk.StringVar(value=DEFAULT_DS18B20_ID)
         self.ds18b20_threshold_c_var = tk.DoubleVar(value=DEFAULT_DS18B20_THRESHOLD_C)
+        self.gpio_alarm_pin_var = tk.IntVar(value=DEFAULT_GPIO_ALARM_PIN)
         self.temp_guard_status_var = tk.StringVar(value="Temp Guard: off")
 
         # Times as µs (always integer ms * 1000 after clamp). Limits in constants.

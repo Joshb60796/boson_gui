@@ -81,7 +81,7 @@ def start_delay_ms_to_us(ms):
 # Master switch: False → feature unused (no sensor traffic, pulses never
 # blocked for temperature). User must check "Temp Guard" in Settings.
 DEFAULT_TEMP_GUARD_ENABLED = False
-# Which backend to use once enabled: "ds18b20" (1-Wire °C) or "ads1115" (I2C V)
+# Which backend once enabled: "ds18b20" | "ads1115" | "gpio_alarm"
 DEFAULT_TEMP_GUARD_SENSOR = "ds18b20"
 
 # ADS1115 + thermistor divider — requires: I2C on, pip install smbus2
@@ -93,3 +93,8 @@ DEFAULT_THERMISTOR_THRESHOLD_V = 2.5  # block pulses when voltage > this
 # DS18B20 — requires: dtoverlay=w1-gpio, 4.7k pull-up; no pip package
 DEFAULT_DS18B20_ID = ""  # empty = first 28-* sensor found under w1 devices
 DEFAULT_DS18B20_THRESHOLD_C = 60.0  # UI clamps usable setpoints to 20–80 °C
+
+# Arduino 3.3 V digital alarm (active HIGH = TEMP HIGH). BCM pin choice avoids:
+#   2/3 I2C, 4 common 1-Wire, 14/15 UART, 17 physical button,
+#   22/23/24/27 default pulse channels.
+DEFAULT_GPIO_ALARM_PIN = 16  # BCM16 — change here or in Settings

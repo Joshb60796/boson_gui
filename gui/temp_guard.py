@@ -5,8 +5,8 @@ Temperature interlock backends for pulse blocking (Temp Guard).
 QUICK START (in the GUI)
 ==============================================================================
 1. Leave "Temp Guard" UNCHECKED until hardware is wired and tested.
-2. Settings → Temp Guard → pick sensor type (DS18B20 or ADS1115).
-3. Set the threshold (Max °C or Max V).
+2. Settings → Temp Guard → pick sensor type (DS18B20, ADS1115, or GPIO alarm).
+3. Set the threshold (Max °C / Max V) or alarm BCM pin for GPIO alarm.
 4. Click "Read Now" / "List sensors" to verify a live reading.
 5. Only then enable "Temp Guard — block pulses when over temperature".
 
@@ -94,12 +94,47 @@ PGA:
   Code uses ±4.096 V full-scale (safe for 0–3.3 V dividers).
 
 ==============================================================================
+OPTION C — Arduino (or other) 3.3 V digital alarm  [GPIO input]
+==============================================================================
+What it is:
+  External controller asserts a digital line HIGH when temperature is too high.
+  This app polls a Raspberry Pi BCM GPIO as an input. HIGH → block pulses and
+  show TEMP HIGH. LOW → allow pulses (when Temp Guard is enabled).
+
+Logic level:
+  Use 3.3 V logic only. Do NOT drive the Pi pin with 5 V Arduino outputs.
+  Arduino 3.3 V boards, or a level shifter from 5 V, are required.
+
+Default pin (BCM numbering):
+  GPIO 16  (change in Settings or constants.DEFAULT_GPIO_ALARM_PIN)
+
+  Intentionally avoids pins already used by this project / common buses:
+    BCM 17     — physical button (PHYSICAL_BUTTON_PIN)
+    BCM 22,23,24,27 — default pulse channels
+    BCM 2, 3   — I2C (SDA/SCL) for ADS1115
+    BCM 4      — common 1-Wire (DS18B20) data
+    BCM 14,15  — UART TX/RX
+    BCM 8–11   — SPI (reserved if you add SPI hardware later)
+
+Wiring:
+  Arduino digital out (3.3 V)  →  Pi BCM16 (or chosen pin)
+  Arduino GND                 →  Pi GND  (common ground required)
+
+  Software enables an internal pull-down on the Pi input so an open/unwired
+  pin reads LOW (no alarm). The Arduino must actively drive HIGH for alarm.
+
+Software:
+  - Uses lgpio (same stack as pulse_controller / physical button)
+  - No extra pip package beyond lgpio
+
+==============================================================================
 BEHAVIOR / SAFETY
 ==============================================================================
 - Threshold compare: reading > limit  →  block pulse + error dialog.
+- GPIO alarm: input HIGH → TEMP HIGH, block pulses.
 - Sensor read failure while Temp Guard is ON → block pulse (fail-safe).
 - Status line on main UI updates about once per second only when enabled.
-- Pulse paths all go through BosonApp.trigger_pulse() → _pulse_allowed().
+- Pulse paths go through TempGuardController.pulse_allowed() before firing.
 
 Related files:
   gui/temp_guard.py     — this module (readers + interlock logic)
@@ -119,7 +154,12 @@ from pathlib import Path
 # Sensor type keys stored in config.json → temp_guard_sensor
 SENSOR_ADS1115 = "ads1115"
 SENSOR_DS18B20 = "ds18b20"
-SENSOR_CHOICES = (SENSOR_ADS1115, SENSOR_DS18B20)
+SENSOR_GPIO_ALARM = "gpio_alarm"  # Arduino (or other) 3.3 V digital HIGH = alarm
+SENSOR_CHOICES = (SENSOR_ADS1115, SENSOR_DS18B20, SENSOR_GPIO_ALARM)
+
+# Default BCM pin for digital alarm — keep free of button / pulses / I2C / UART.
+# See constants.DEFAULT_GPIO_ALARM_PIN and module docstring OPTION C.
+_DEFAULT_GPIO_ALARM_PIN = 16
 
 # ---------------------------------------------------------------------------
 # ADS1115 register map (I2C ADC — see module docstring for wiring/install)
@@ -377,13 +417,103 @@ class DS18B20Reader:
                 return None
 
 
+class DigitalAlarmReader:
+    """
+    Active-HIGH digital temperature alarm on a Pi BCM GPIO (e.g. from Arduino).
+
+    HIGH (1) → alarm (TEMP HIGH), block pulses.
+    LOW  (0) → OK.
+    Internal pull-down so floating/open reads as LOW.
+    Wiring / pin choice: module docstring OPTION C.
+    """
+
+    def __init__(self, pin=_DEFAULT_GPIO_ALARM_PIN):
+        self.pin = int(pin)
+        self._h = None
+        self._lock = threading.Lock()
+        self.last_error = None
+        self.last_level = None  # 0 or 1
+        self.available = False
+
+    def configure(self, pin=None):
+        with self._lock:
+            if pin is not None and int(pin) != self.pin:
+                self.pin = int(pin)
+                self._close_unlocked()
+
+    def _close_unlocked(self):
+        if self._h is not None:
+            try:
+                import lgpio
+
+                try:
+                    lgpio.gpio_free(self._h, self.pin)
+                except Exception:
+                    pass
+                lgpio.gpiochip_close(self._h)
+            except Exception:
+                pass
+            self._h = None
+        self.available = False
+
+    def close(self):
+        with self._lock:
+            self._close_unlocked()
+
+    def _open_unlocked(self):
+        if self._h is not None:
+            return
+        try:
+            import lgpio
+
+            h = lgpio.gpiochip_open(0)
+            # Pull-down: open wire → LOW (no false TEMP HIGH)
+            lgpio.gpio_claim_input(h, self.pin, lgpio.SET_PULL_DOWN)
+            self._h = h
+            self.available = True
+            self.last_error = None
+            print(f"Temp guard digital alarm ready on BCM{self.pin} (active HIGH)")
+        except ImportError:
+            self._h = None
+            self.available = False
+            self.last_error = "lgpio not installed (pip install lgpio or apt python3-lgpio)"
+        except Exception as e:
+            self._h = None
+            self.available = False
+            self.last_error = str(e)
+
+    def read_level(self):
+        """
+        Return 1 if alarm line is HIGH, 0 if LOW, or None on failure.
+        """
+        with self._lock:
+            self._open_unlocked()
+            if self._h is None:
+                self.last_level = None
+                return None
+            try:
+                import lgpio
+
+                level = int(lgpio.gpio_read(self._h, self.pin))
+                self.last_level = 1 if level else 0
+                self.last_error = None
+                self.available = True
+                return self.last_level
+            except Exception as e:
+                self.last_error = str(e)
+                self.last_level = None
+                self.available = False
+                self._close_unlocked()
+                return None
+
+
 class TempGuard:
     """
     Unified temperature interlock used by BosonApp before GPIO pulses.
 
     When temp_guard_enabled is False: always allows pulses (no hardware use).
-    When True: uses selected backend (ads1115 | ds18b20) and blocks if over
-    threshold or if the sensor cannot be read.
+    When True: uses selected backend (ads1115 | ds18b20 | gpio_alarm) and
+    blocks if over threshold / alarm HIGH, or if the sensor cannot be read.
 
     Setup checklist is in the module docstring at the top of this file.
     """
@@ -391,9 +521,10 @@ class TempGuard:
     def __init__(self):
         self.ads = Ads1115Reader()
         self.ds18b20 = DS18B20Reader()
+        self.gpio_alarm = DigitalAlarmReader()
         self.last_error = None
-        self.last_reading = None  # float: volts or °C
-        self.last_unit = None  # "V" or "C"
+        self.last_reading = None  # float V/°C, or 0/1 for GPIO alarm
+        self.last_unit = None  # "V", "C", or "ALARM"
         self._sensor_type = SENSOR_DS18B20
 
     def configure(
@@ -403,23 +534,30 @@ class TempGuard:
         i2c_address=_ADS1115_DEFAULT_ADDR,
         channel=0,
         ds18b20_id="",
+        gpio_alarm_pin=_DEFAULT_GPIO_ALARM_PIN,
     ):
         """Apply Settings values; does not force a hardware open until read."""
         self.ads.configure(
             i2c_bus=i2c_bus, i2c_address=i2c_address, channel=channel
         )
         self.ds18b20.configure(sensor_id=ds18b20_id)
+        self.gpio_alarm.configure(pin=gpio_alarm_pin)
         self._sensor_type = sensor_type
 
     def close(self):
         self.ads.close()
         self.ds18b20.close()
+        self.gpio_alarm.close()
 
     def read_current(self, sensor_type):
         """
         Read the active sensor.
 
-        Returns (value, unit) where unit is "V" or "C", or (None, None) on failure.
+        Returns (value, unit):
+          DS18B20 → (°C, "C")
+          ADS1115 → (volts, "V")
+          GPIO alarm → (0 or 1, "ALARM")  where 1 = TEMP HIGH
+          Failure → (None, None)
         """
         if sensor_type == SENSOR_DS18B20:
             value = self.ds18b20.read_celsius()
@@ -431,6 +569,17 @@ class TempGuard:
             self.last_reading = value
             self.last_unit = "C"
             return value, "C"
+
+        if sensor_type == SENSOR_GPIO_ALARM:
+            level = self.gpio_alarm.read_level()
+            self.last_error = self.gpio_alarm.last_error
+            if level is None:
+                self.last_reading = None
+                self.last_unit = None
+                return None, None
+            self.last_reading = level
+            self.last_unit = "ALARM"
+            return level, "ALARM"
 
         # Default / ADS1115 thermistor voltage
         value = self.ads.read_voltage()
@@ -462,7 +611,12 @@ class TempGuard:
         value, unit = self.read_current(sensor_type)
 
         if value is None:
-            name = "DS18B20" if sensor_type == SENSOR_DS18B20 else "ADS1115"
+            if sensor_type == SENSOR_DS18B20:
+                name = "DS18B20"
+            elif sensor_type == SENSOR_GPIO_ALARM:
+                name = "GPIO digital alarm"
+            else:
+                name = "ADS1115"
             msg = (
                 f"Temp guard: cannot read {name}.\n"
                 f"Detail: {self.last_error or 'unknown error'}\n"
@@ -470,6 +624,16 @@ class TempGuard:
                 "See comments in gui/temp_guard.py for install & wiring."
             )
             return False, msg, None
+
+        if sensor_type == SENSOR_GPIO_ALARM:
+            # Active HIGH from Arduino (or other 3.3 V controller)
+            if int(value) != 0:
+                msg = (
+                    "TEMP HIGH — pulse blocked.\n"
+                    f"Digital alarm input is HIGH (BCM{self.gpio_alarm.pin})."
+                )
+                return False, msg, value
+            return True, None, value
 
         if sensor_type == SENSOR_DS18B20:
             limit = float(threshold_c)
