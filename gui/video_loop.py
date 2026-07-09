@@ -1,4 +1,9 @@
-"""Live video display loop and FPS metering."""
+"""Live video display loop and FPS metering.
+
+Frame grabs go only through CameraService.read_frame() (Phase 2 lock).
+While recording.is_recording is True, this loop does not call the camera
+so stream capture is not competing for frames.
+"""
 
 import time
 
@@ -24,10 +29,12 @@ class VideoLoop:
     def update_frame(self):
         app = self.app
 
+        # Yield camera exclusively to RecordingService during stream capture
         if app.recording.is_recording:
             app.root.after(200, self.update_frame)
             return
 
+        # Sole live-view grab path — never touch camera._cap directly
         ret, frame = app.camera.read_frame()
         if ret:
             self.frame_count += 1

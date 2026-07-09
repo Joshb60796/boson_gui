@@ -1,5 +1,11 @@
-"""Boson+ camera connection and control (SDK + V4L2 capture)."""
+"""
+Boson+ camera connection and control (SDK + V4L2 capture).
 
+Phase 2: all OpenCV frame grabs go through CameraService.read_frame() under
+a lock. No other module may call VideoCapture.read().
+"""
+
+import threading
 import time
 
 import cv2
@@ -21,7 +27,9 @@ class CameraService:
     def __init__(self, app):
         self.app = app
         self.myCam = None
-        self.cap = None
+        # Private capture handle — use read_frame() / read_frames() only
+        self._cap = None
+        self._read_lock = threading.RLock()
         self.hardware_base_fps = DEFAULT_FRAME_RATE
         self.auto_ffc_enabled = True
 
@@ -31,14 +39,17 @@ class CameraService:
         self.myCam = CamAPI.pyClient(manualport=COM_PORT, useDll=False)
         self.myCam.bosonSetGainMode(FLR_BOSON_GAINMODE_E.FLR_BOSON_HIGH_GAIN)
 
-        self.cap = cv2.VideoCapture(VIDEO_DEVICE_INDEX, cv2.CAP_V4L2)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
+        with self._read_lock:
+            self._cap = cv2.VideoCapture(VIDEO_DEVICE_INDEX, cv2.CAP_V4L2)
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
 
-        if not self.cap.isOpened():
-            print("ERROR: Could not open video stream.")
-            self.myCam.Close()
-            raise SystemExit(1)
+            if not self._cap.isOpened():
+                print("ERROR: Could not open video stream.")
+                self.myCam.Close()
+                self.myCam = None
+                self._cap = None
+                raise SystemExit(1)
 
         self.myCam.TLinearSetControl(FLR_ENABLE_E.FLR_DISABLE)
         self.myCam.sysctrlSetUsbVideoIR16Mode(
@@ -60,6 +71,12 @@ class CameraService:
         time.sleep(0.6)
 
         print("Radiometric mode enabled (RAW counts by default).\n")
+        print("CameraService: frame access is locked (read_frame only).")
+
+    @property
+    def is_open(self) -> bool:
+        with self._read_lock:
+            return self._cap is not None and self._cap.isOpened()
 
     @staticmethod
     def _unwrap_sdk_value(result):
@@ -141,19 +158,55 @@ class CameraService:
                 app.btn_auto_ffc.config(text="Disable Auto FFC")
             self.auto_ffc_enabled = True
 
+    # ------------------------------------------------------------------ capture
     def read_frame(self):
-        return self.cap.read()
+        """
+        Thread-safe single-frame grab.
+
+        Returns
+        -------
+        (ok: bool, frame: ndarray | None)
+        """
+        with self._read_lock:
+            if self._cap is None:
+                return False, None
+            try:
+                ok, frame = self._cap.read()
+                if not ok:
+                    return False, None
+                return True, frame
+            except Exception as e:
+                print(f"CameraService.read_frame error: {e}")
+                return False, None
+
+    def read_frames(self, count):
+        """
+        Grab ``count`` frames sequentially (each grab under the read lock).
+
+        Stops early if a read fails. Used by stream / multi-frame capture.
+        Live view should skip while recording (is_recording) so this path
+        is not starved by the UI loop.
+        """
+        count = max(0, int(count))
+        frames = []
+        for _ in range(count):
+            ok, frame = self.read_frame()
+            if not ok:
+                break
+            frames.append(frame)
+        return frames
 
     def temp_from_counts(self, counts):
         return self.myCam.radiometryGetTempFromCounts(counts)
 
     def close(self):
-        if self.cap is not None:
-            try:
-                self.cap.release()
-            except Exception:
-                pass
-            self.cap = None
+        with self._read_lock:
+            if self._cap is not None:
+                try:
+                    self._cap.release()
+                except Exception:
+                    pass
+                self._cap = None
         if self.myCam is not None:
             try:
                 self.myCam.Close()

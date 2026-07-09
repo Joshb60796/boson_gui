@@ -3,7 +3,7 @@ Boson+ radiometric viewer — application orchestrator.
 
 Collaborators (do the real work):
   gui/gpio_service.py         — single lgpio chip + pin registry
-  gui/camera.py               — Boson SDK + V4L2
+  gui/camera.py               — Boson SDK + V4L2 (locked read_frame only)
   gui/recording.py            — frame/stream/background capture
   gui/pulse_actions.py        — GPIO pulse trigger
   gui/hardware_button.py      — physical button monitor
@@ -168,9 +168,7 @@ class BosonApp:
     def myCam(self):
         return self.camera.myCam
 
-    @property
-    def cap(self):
-        return self.camera.cap
+    # Phase 2: no public app.cap — use app.camera.read_frame() only.
 
     @property
     def temp_guard(self):

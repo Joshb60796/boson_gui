@@ -53,6 +53,7 @@ class RecordingService:
 
         def do_capture():
             try:
+                # Sequential locked reads (camera owns the only VideoCapture.read)
                 frames = []
                 for _ in range(10):
                     ret, frame = app.camera.read_frame()
@@ -174,16 +175,16 @@ class RecordingService:
             else:
                 app.pulses.trigger_pulse()
 
+        # Pause live view (video_loop checks is_recording) while we grab
         self.is_recording = True
         num_frames = app.record_frames_var.get()
-        captured_frames = []
 
         def do_stream_capture():
+            captured_frames = []
             try:
-                for _ in range(num_frames):
-                    ret, frame = app.camera.read_frame()
-                    if not ret:
-                        break
+                # Each frame via CameraService.read_frame() under its lock
+                raw_frames = app.camera.read_frames(num_frames)
+                for frame in raw_frames:
                     frame = self.process_frame(frame)
                     frame = finalize_frame(frame)
                     captured_frames.append(frame.copy())
